@@ -19,16 +19,18 @@ type modelMeta struct {
 	LongOutput  float64
 	Context     int
 	MaxOutput   int
+	// Reasoning lists supported reasoning.effort values. Empty means thinking is not advertised.
+	Reasoning []string
 }
 
 var catalog = map[string]modelMeta{
-	"gpt-6-astra":   {10, 1, 12.5, 50, 20, 2, 25, 75, 1_050_000, 128_000},
-	"gpt-6.1-sol":   {2, 0.10, 2.5, 10, 4, 0.20, 5, 15, 1_050_000, 128_000},
-	"gpt-6-sol":     {2, 0.20, 2.5, 10, 4, 0.40, 5, 15, 1_050_000, 128_000},
-	"gpt-6-luna":    {0.10, 0.01, 0.125, 0.50, 0.20, 0.02, 0.25, 0.75, 1_050_000, 128_000},
-	"gpt-5.6-sol":   {4, 0.40, 5, 20, 8, 0.80, 10, 30, 1_050_000, 128_000},
-	"gpt-5.6-terra": {2, 0.20, 2.5, 12, 4, 0.40, 5, 18, 1_050_000, 128_000},
-	"gpt-5.6-luna":  {0.20, 0.02, 0.25, 1.20, 0.40, 0.04, 0.50, 1.80, 1_050_000, 128_000},
+	"gpt-6-astra":   {10, 1, 12.5, 50, 20, 2, 25, 75, 1_050_000, 128_000, nil},
+	"gpt-6.1-sol":   {2, 0.10, 2.5, 10, 4, 0.20, 5, 15, 1_050_000, 128_000, []string{"low", "medium", "high", "xhigh", "max"}},
+	"gpt-6-sol":     {2, 0.20, 2.5, 10, 4, 0.40, 5, 15, 1_050_000, 128_000, []string{"none", "low", "medium", "high", "xhigh", "max"}},
+	"gpt-6-luna":    {0.10, 0.01, 0.125, 0.50, 0.20, 0.02, 0.25, 0.75, 1_050_000, 128_000, []string{"none", "low", "medium", "high", "xhigh", "max"}},
+	"gpt-5.6-sol":   {4, 0.40, 5, 20, 8, 0.80, 10, 30, 1_050_000, 128_000, nil},
+	"gpt-5.6-terra": {2, 0.20, 2.5, 12, 4, 0.40, 5, 18, 1_050_000, 128_000, nil},
+	"gpt-5.6-luna":  {0.20, 0.02, 0.25, 1.20, 0.40, 0.04, 0.50, 1.80, 1_050_000, 128_000, []string{"none", "low", "medium", "high", "xhigh", "max"}},
 }
 
 func (s *server) listModels(w http.ResponseWriter, r *http.Request) {
@@ -98,7 +100,7 @@ func modelObject(id string) map[string]any {
 	if !known {
 		meta = modelMeta{Context: 1_050_000, MaxOutput: 128_000}
 	}
-	return map[string]any{
+	obj := map[string]any{
 		"id":                id,
 		"object":            "model",
 		"created":           time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).Unix(),
@@ -107,6 +109,7 @@ func modelObject(id string) map[string]any {
 		"max_output_tokens": meta.MaxOutput,
 		"input_modalities":  []string{"text", "image", "video"},
 		"output_modalities": []string{"text"},
+		"thinking":          len(meta.Reasoning) > 0,
 		"pricing": map[string]any{
 			"currency":                       "USD",
 			"unit":                           "per_1m_tokens",
@@ -121,4 +124,12 @@ func modelObject(id string) map[string]any {
 			},
 		},
 	}
+	if len(meta.Reasoning) > 0 {
+		obj["reasoning"] = map[string]any{
+			"supported":        true,
+			"default_effort":   "medium",
+			"supported_effort": meta.Reasoning,
+		}
+	}
+	return obj
 }
