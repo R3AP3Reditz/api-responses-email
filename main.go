@@ -78,6 +78,8 @@ func main() {
 	}
 	s := &server{cfg: cfg, db: db, proxy: newProxy(), limits: map[string]*windowCount{}}
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /signup", s.signupPage)
+	mux.HandleFunc("POST /signup", s.signupSubmit)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ok":true}`))
@@ -202,6 +204,10 @@ func openDB(dir string) (*sql.DB, error) {
 	}
 	_, _ = db.Exec(`ALTER TABLE api_keys ADD COLUMN rpm INTEGER NOT NULL DEFAULT 0`)
 	_, _ = db.Exec(`ALTER TABLE api_keys ADD COLUMN key_secret TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE api_keys ADD COLUMN email TEXT NOT NULL DEFAULT ''`)
+	if _, err = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS api_keys_email_active ON api_keys(email) WHERE revoked = 0 AND email != ''`); err != nil {
+		return nil, err
+	}
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS upstreams (
 		id TEXT PRIMARY KEY,
 		name TEXT NOT NULL,
@@ -258,7 +264,7 @@ func newProxy() *httputil.ReverseProxy {
 			up := r.In.Context().Value(upstreamCtx{}).(*upstream)
 			r.SetURL(up.URL)
 			r.Out.Host = up.URL.Host
-			path := singleJoining(up.URL.Path, r.In.URL.Path)
+			path := upstreamPath(up.URL.Path, r.In.URL.Path)
 			r.Out.URL.Path = path
 			r.Out.URL.RawPath = path
 			r.Out.URL.RawQuery = r.In.URL.RawQuery
@@ -272,6 +278,20 @@ func newProxy() *httputil.ReverseProxy {
 		},
 	}
 	return proxy
+}
+
+// upstreamPath joins the upstream base with the client path. Clients call
+// /v1/responses while Azure bases already end in /openai/v1, so a second /v1
+// is dropped.
+func upstreamPath(base, path string) string {
+	path = "/" + strings.TrimLeft(path, "/")
+	if strings.HasSuffix(strings.TrimRight(base, "/"), "/v1") && (path == "/v1" || strings.HasPrefix(path, "/v1/")) {
+		path = strings.TrimPrefix(path, "/v1")
+		if path == "" {
+			path = "/"
+		}
+	}
+	return singleJoining(base, path)
 }
 
 func singleJoining(base, path string) string {
@@ -471,10 +491,11 @@ type keyRow struct {
 	LastUsedAt string
 	RPM        int
 	Secret     string
+	Email      string
 }
 
 func (s *server) listKeys() ([]keyRow, error) {
-	rows, err := s.db.Query(`SELECT id, name, key_prefix, created_at, revoked, COALESCE(last_used_at, ''), rpm, COALESCE(key_secret, '') FROM api_keys ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT id, name, key_prefix, created_at, revoked, COALESCE(last_used_at, ''), rpm, COALESCE(key_secret, ''), COALESCE(email, '') FROM api_keys ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -483,7 +504,7 @@ func (s *server) listKeys() ([]keyRow, error) {
 	for rows.Next() {
 		var k keyRow
 		var revoked int
-		if err := rows.Scan(&k.ID, &k.Name, &k.Prefix, &k.CreatedAt, &revoked, &k.LastUsedAt, &k.RPM, &k.Secret); err != nil {
+		if err := rows.Scan(&k.ID, &k.Name, &k.Prefix, &k.CreatedAt, &revoked, &k.LastUsedAt, &k.RPM, &k.Secret, &k.Email); err != nil {
 			return nil, err
 		}
 		k.Revoked = revoked == 1
@@ -862,11 +883,12 @@ var adminTmpl = template.Must(template.New("admin").Parse(`<!doctype html>
     <button type="submit">Create key</button>
   </form>
   <table>
-    <thead><tr><th>Name</th><th>Key</th><th>RPM</th><th>Last used</th><th></th></tr></thead>
+    <thead><tr><th>Name</th><th>Email</th><th>Key</th><th>RPM</th><th>Last used</th><th></th></tr></thead>
     <tbody>
     {{range .Keys}}
       <tr>
         <td class="name">{{.Name}}{{if .Revoked}} <span class="revoked">revoked</span>{{end}}</td>
+        <td>{{if .Email}}{{.Email}}{{else}}<span class="when">—</span>{{end}}</td>
         <td>
           {{if .Secret}}
           <div class="keycell">
@@ -895,7 +917,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(`<!doctype html>
         </td>
       </tr>
     {{else}}
-      <tr><td class="empty" colspan="5">No keys yet. Name one above.</td></tr>
+      <tr><td class="empty" colspan="6">No keys yet. Name one above.</td></tr>
     {{end}}
     </tbody>
   </table>
