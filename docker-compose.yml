@@ -1,8 +1,10 @@
 services:
   proxy:
     build: .
-    ports:
-      - "8080:8080"
+    # Container port only. Coolify's proxy reaches this. A fixed host
+    # port of 8080 fails when that port is already taken on the VPS.
+    expose:
+      - "8080"
     environment:
       UPSTREAM_BASE_URL: ${UPSTREAM_BASE_URL}
       UPSTREAM_API_KEY: ${UPSTREAM_API_KEY}
